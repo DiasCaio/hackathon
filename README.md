@@ -1,149 +1,176 @@
-# README — Forecast Semanal PDV/SKU (Hackathon)
+# Previsão de Vendas Semanais por PDV × SKU (Jan/2023)
 
-Este projeto treina uma LSTM para prever **quantidade semanal por PDV/SKU** nas **5 semanas de janeiro/2023** usando o histórico de **2022**. O pipeline está organizado em células (notebook) e foi escrito para ser **reprodutível**, **rápido** e com **sanidade contra vazamentos**.
+Projeto para prever **quantidade semanal** por **PDV × SKU** para as 5 semanas de **janeiro/2023**, usando o histórico de **2022**. O objetivo é apoiar reposição no varejo, com foco em **WMAPE** como métrica principal.
 
 ---
 
-## 1) Pré-requisitos
+## Sumário
+- [Stack / Ambiente](#stack--ambiente)
+- [Escolha de GPU](#escolha-de-gpu)
+- [Dados](#dados)
+- [Pipeline (visão geral)](#pipeline-visão-geral)
+- [Como rodar no Kaggle](#como-rodar-no-kaggle)
+- [Saídas (formato de submissão)](#saídas-formato-de-submissão)
+- [Decisões de Modelagem (racional)](#decisões-de-modelagem-racional)
+- [Validação & Métrica](#validação--métrica)
+- [Compactação p/ Submissão](#compactação-p-submissão)
+- [Estrutura do repositório](#estrutura-do-repositório)
+- [Solução de problemas](#solução-de-problemas)
+- [Licença](#licença)
 
-- Python 3.9+ (recomendado 3.10/3.11)
-- Pip/venv ou Conda
-- (Opcional, recomendado) GPU com CUDA para treinar mais rápido
+---
 
-### Instalação
+## Stack / Ambiente
 
-```bash
-# recomenda-se usar um virtualenv
-python -m venv .venv
-source .venv/bin/activate     # Windows: .venv\Scripts\activate
+- Python 3.11 (Kaggle)
+- **Pandas**, **NumPy**, **Matplotlib**
+- **XGBoost 2.x** (GPU)
+- **Numba** (para aceleração de cálculos)
+- Parquet via **pyarrow**
 
-pip install --upgrade pip
-pip install numpy pandas scikit-learn matplotlib tensorflow
+> No Kaggle isso já vem pré-instalado.
+
+---
+
+## Escolha de GPU
+
+Usamos **GPU T4 (2× disponível no Kaggle)**. O treino com XGBoost utiliza **uma GPU** por padrão (multi-GPU exigiria Dask/Rabit e não traz ganho proporcional aqui). A escolha T4 é estável e tem boa memória; **P100** também funciona, mas mantivemos T4 pela disponibilidade.
+
+---
+
+## Dados
+
+Fonte: dataset Kaggle anexado como **`arquivos`** (três Parquets).
+
+- **Transações (2022)**  
+  `internal_store_id, internal_product_id, transaction_date, quantity, net_value, ...`
+- **Cadastro de PDVs**  
+  `pdv, premise (On/Off), categoria_pdv, zipcode`
+- **Cadastro de Produtos**  
+  `produto, categoria, descricao, tipos, marca, fabricante, ...`
+
+> **Importante:** os nomes dos arquivos possuem sufixos dinâmicos (ex.: `tid-...`). O notebook **detecta automaticamente** qual é cada arquivo pelo **esquema de colunas** (sem hardcode de nomes).
+
+---
+
+## Pipeline (visão geral)
+
+1. **Ingestão & Normalização**
+   - Leitura Parquet (auto-descoberta por colunas).
+   - `lower_snake_case` nos nomes de colunas.
+
+2. **Agregação Semanal**
+   - Granularidade alvo: **PDV × SKU × semana**.
+   - Soma de `quantidade` e `net_value` por semana.
+
+3. **EDA (sanity checks)**
+   - Histograma de `quantidade` (cap 99º pct para visualização).
+   - Média por `weekofyear`.
+   - Proporção de zeros por semana.
+
+4. **Limpeza + Features (vetorizado)**
+   - **Negativos → 0** e **cap global p99.9** em `quantidade`.
+   - **Preço unitário** robusto: `uprice = net_value / quantidade` (com proteção a zero).
+   - **Calendário cíclico**: `sin/cos(weekofyear)`.
+   - **Lags**: `lag_1,2,3,4,8,12`, **rollings**: `mean_4,8,12`.
+   - **WSL** (weeks_since_last_sale) com **Numba** (1 passada O(n)).
+   - **Agregados globais com lag**: `sku_week_avg_lag1`, `pdv_week_total_lag1`.
+   - IDs densas (`pdv_id`, `prod_id`) usando `category.codes`.
+
+5. **Split Temporal**
+   - **Treino:** até **2022-12-04**  
+   - **Validação (holdout):** **dez/2022**  
+   - Evita vazamento e simula o cenário de prever jan/2023.
+
+6. **Treino do Modelo (XGBoost GPU)**
+   - `objective="reg:absoluteerror"` (MAE), **alinha melhor com WMAPE**.
+   - `tree_method="gpu_hist"`, `DeviceQuantileDMatrix(max_bin=128)`.
+   - Regularização (`max_depth=7`, `min_child_weight≈8`, `lambda`, `alpha`).
+   - `subsample`/`colsample_bytree` para reduzir variância.
+   - **Early stopping** com WMAPE em validação.
+
+7. **Forecast de 5 semanas (Jan/2023)**
+   - Previsão **semana a semana** com **feedback** (atualiza lags/WSL/agregados com as próprias previsões).
+   - Clamp em p99.9 e arredondamento para inteiros.
+
+8. **Compactação p/ Submissão**
+   - Mantém pares com **venda nas últimas 12 semanas**.
+   - Seleciona **top-K** por volume recente para ficar dentro dos limites do portal.
+
+---
+
+## Como rodar no Kaggle
+
+1. Crie um **Notebook** e adicione o dataset **`arquivos`** (Add data → “arquivos”).  
+2. Em **Settings**, selecione **GPU → T4 x2** (ok rodar em 1 T4 também).  
+3. Copie o notebook deste repo (ou suba o `.ipynb`).  
+4. **Execute** as células em ordem.  
+   - O notebook faz a **detecção automática** dos Parquets.  
+   - O output final é salvo em:
+     - `/kaggle/working/forecast_jan2023_refined_small.csv`  
+     - `/kaggle/working/forecast_jan2023_refined_small.parquet`
+
+---
+
+## Saídas (formato de submissão)
+
+CSV/Parquet com **UTF-8** e **`";"`** como separador (CSV), colunas:
+
+```
+semana;pdv;produto;quantidade
+1;1023;123;120
+2;1045;234;85
+...
 ```
 
-> Caso tenha problemas com `tensorflow` em CPU/Windows, instale a versão específica compatível com sua plataforma.
+**Restrições do portal** (já respeitadas na compactação):
+- CSV **< 50 MB**
+- Parquet **≤ 1.5M linhas**
 
 ---
 
-## 2) Dados de entrada
+## Decisões de Modelagem (racional)
 
-Você precisa consolidar as 3 bases (transações, produtos, PDVs) em um único DataFrame `df_final`, depois criar `df_modelo_inicial` com as colunas mínimas:
+- **Agregação semanal:** reduz ruído diário e casa com o **ciclo de reposição** do varejo.
+- **Cap p99.9 + negativos→0:** protege o modelo de **outliers**/erros sem achatar a distribuição.
+- **Sinais de calendário cíclicos:** `sin/cos(weekofyear)` evitam a “quebra” entre semanas 52→1.
+- **Lags & Rollings:** capturam **memória recente** e tendências (1–12 semanas).
+- **WSL (Numba):** diferencia **zero pontual** de “**faz semanas sem vender**” (demanda intermitente).
+- **Agregados globais (lag1):** contexto de SKU/PDV na semana **sem vazamento**.
+- **XGBoost (MAE):** mais próximo do **WMAPE**, robusto a cauda longa e fácil de acelerar na GPU.
 
-- `transaction_date` (datetime)
-- `pdv` (str)
-- `produto` (str)
-- `quantity` (float)
+---
 
-A seguir, agregue **por semana ISO** e crie o dataset final (`df_modelo_inicial`) com schema:
+## Validação & Métrica
 
-| coluna      | tipo     |
-|-------------|----------|
-| pdv         | object   |
-| produto     | object   |
-| ano_iso     | int32    |
-| semana      | int32    |
-| quantity    | float64  |
+- **WMAPE** (Weighted Mean Absolute Percentage Error):
+  
+  \[ \mathrm{WMAPE} = rac{\sum |y - \hat{y}|}{\sum |y|} \]
 
-**Semanas ISO** (exemplo):
-```python
-df_modelo_inicial['ano_iso']  = df_modelo_inicial['transaction_date'].dt.isocalendar().year.astype(int)
-df_modelo_inicial['semana']   = df_modelo_inicial['transaction_date'].dt.isocalendar().week.astype(int)
+- Holdout: **dez/2022**.  
+- O notebook também loga **MAE/WMAPE** em treino/validação e usa **early stopping**.
+
+> Observação: os números exatos variam conforme randomização/ambiente, mas a validação segue o mesmo protocolo.
+
+---
+
+## Compactação p/ Submissão
+
+Para caber nos limites e focar no que gira:
+1. Filtra pares com **`last12 > 0`** (houve venda nas 12 últimas semanas observadas).  
+2. Ranqueia por `qty_last12` e `qty_total_2022`.  
+3. Seleciona **top-K** de pares para manter ~**1.13M linhas** no CSV final (<50MB).
+
+---
+
+## Estrutura do repositório
+
 ```
+.
+├─ notebooks/
+│  ├─ notebook-versao-final-hackathon.ipynb              # notebook principal (pipeline completo)
+├─ README.md                               # este arquivo
 
----
-
-## 3) Estrutura do projeto
-
-- **Notebook** (recomendado): executar as células na ordem.
-- **Células**:
-  1. **Setup & Config** — imports, seeds, hiperparâmetros.
-  2. **Preparação (`df_nn`)** — limpeza, agregação de duplicatas e criação de `week_start`.
-  3. **Split temporal** — 80/20 por semanas ISO com `gap=1`.
-  4. **Escala por série** — MinMax **fit somente no treino** (anti-vazamento).
-  5. **Funções utilitárias** — janelas, (des)escala, WMAPE, limpeza.
-  6. **Treino LSTM** — janelas, sample weights ~|y|, early stopping, seleção do melhor.
-  7. **Forecast + CSV** — rollout para ISO‐semanas 1..5 de 2023; salva `previsoes_jan2023.csv`.
-
----
-
-## 4) Execução passo a passo
-
-### 4.1. Setup & Config
-Defina:
-- `GAP = 1`
-- `TRAIN_FRAC = 0.80`
-- `RANDOM_SEED = 42`
-- `CONFIGS` (ex.: `lookback=8`, `units=64`, `dropout=0.2`, `loss='huber'`, `lr=1e-3`, `batch_size=1024`, `epochs=12`)
-
-### 4.2. Preparação (`df_nn`)
-- Colunas: `['pdv','produto','ano_iso','semana','quantity']`
-- Somar duplicatas por `(pdv,produto,ano_iso,semana)`
-- Criar `week_start` (segunda-feira ISO): `pd.to_datetime(f"{ano}{semana:02d}1", format='%G%V%u')`
-- Ordenar por `['pdv','produto','week_start']`
-
-### 4.3. Split temporal (80/20 + gap)
-- Construir `weeks_train` e `weeks_test` com `TimeSeriesSplit`
-- Marcar `df_nn['split'] ∈ {train, test}`
-
-### 4.4. Escala por série (MinMax do treino)
-- Por `(pdv,produto)` **no treino**, calcular `ymin`, `ymax` e `range=(ymax-ymin).replace(0,1.0)`
-- Fallback global (min/max do treino) para séries só no teste
-- `quantity_scaled = (quantity - ymin)/range`
-
-### 4.5. Utilitários
-- `build_windows_intrasplit_with_meta` — janelas de treino/val (contíguas)
-- `build_windows_cross_boundary_with_meta` — janelas de teste (alvo em `test`)
-- `inverse_per_series_from_meta` — desescala por série
-- `wmape` — métrica oficial
-- `clean_windows` — remove janelas com NaN/Inf
-
-### 4.6. Treino LSTM
-- (Recomendado p/ reprodutibilidade do melhor score):
-  - Filtrar séries com **≥ 16 semanas**.
-  - Cap de janelas de treino: `MAX_TRAIN_WINDOWS = 800_000` (determinístico).
-- Pesos por amostra `~ |y_real|` (aproxima WMAPE).
-- Modelo:
-  ```
-  Input (lookback,1) → LSTM(units, dropout)
-  → Dense(units/2, ReLU) → Dense(1, linear)
-  ```
-- Callbacks: `EarlyStopping(patience=2, restore_best_weights=True)` + `ReduceLROnPlateau`.
-- Salvar `best_model`, `best_lookback` e (opcional) `best_history` (curvas).
-
-### 4.7. Forecast + CSV
-- Construir janelas iniciais (apenas histórico ≤ fim do treino).
-- Rollout **5 passos** (semanas ISO **1..5/2023**).
-- Desescalar por série e salvar **`previsoes_jan2023.csv`** (separador `;`, UTF-8, colunas: `semana;pdv;produto;quantidade`).
-
----
-
-## 5) Avaliação
-
-- **WMAPE global** (teste) e **baseline lag-1**; cobertura (% de casos em que o modelo erra menos que o baseline).
-- **Backtesting** (splits rolantes em 2022): mediana/IQR do WMAPE.
-- **Erro por segmento** (faixa de volume, PDV, produto, semana do ano).
-
----
-
-## 6) Reprodutibilidade
-
-- Seeds fixas: `np.random.seed(42)` e `tf.keras.utils.set_random_seed(42)`
-- Mantenha iguais: filtros (≥16 semanas), cap de janelas (800k) e `CONFIGS`.
-
----
-
-## 7) Dicas de performance
-
-- Use GPU (CUDA) quando possível.
-- Ajuste `MAX_TRAIN_WINDOWS` e `batch_size` conforme memória.
-- `clean_windows` evita NaN/Inf que derrubam o treino.
-
----
-
-
-## 8) Saída esperada
-
-- Logs com formas de janelas e métricas.
-- **`previsoes_jan2023.csv`** com ~N_series × 5 linhas no formato exigido.
+```
 
 ---
