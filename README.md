@@ -15,8 +15,7 @@ Projeto para prever **quantidade semanal** por **PDV × SKU** para as 5 semanas 
 - [Validação & Métrica](#validação--métrica)
 - [Compactação p/ Submissão](#compactação-p-submissão)
 - [Estrutura do repositório](#estrutura-do-repositório)
-- [Solução de problemas](#solução-de-problemas)
-- [Licença](#licença)
+
 
 ---
 
