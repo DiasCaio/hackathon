@@ -47,15 +47,12 @@ Fonte: dataset Kaggle anexado como **`arquivos`** (três Parquets).
   `pdv, premise (On/Off), categoria_pdv, zipcode`
 - **Cadastro de Produtos**  
   `produto, categoria, descricao, tipos, marca, fabricante, ...`
-
-> **Importante:** os nomes dos arquivos possuem sufixos dinâmicos (ex.: `tid-...`). O notebook **detecta automaticamente** qual é cada arquivo pelo **esquema de colunas** (sem hardcode de nomes).
-
 ---
 
 ## Pipeline (visão geral)
 
 1. **Ingestão & Normalização**
-   - Leitura Parquet (auto-descoberta por colunas).
+   - Leitura Parquet
    - `lower_snake_case` nos nomes de colunas.
 
 2. **Agregação Semanal**
@@ -104,7 +101,6 @@ Fonte: dataset Kaggle anexado como **`arquivos`** (três Parquets).
 2. Em **Settings**, selecione **GPU → T4 x2** (ok rodar em 1 T4 também).  
 3. Copie o notebook deste repo (ou suba o `.ipynb`).  
 4. **Execute** as células em ordem.  
-   - O notebook faz a **detecção automática** dos Parquets.  
    - O output final é salvo em:
      - `/kaggle/working/forecast_jan2023_refined_small.csv`  
      - `/kaggle/working/forecast_jan2023_refined_small.parquet`
