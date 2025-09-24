@@ -16,7 +16,6 @@ Projeto para prever **quantidade semanal** por **PDV × SKU** para as 5 semanas 
 - [Compactação p/ Submissão](#compactação-p-submissão)
 - [Estrutura do repositório](#estrutura-do-repositório)
 
-
 ---
 
 ## Stack / Ambiente
@@ -41,18 +40,22 @@ Usamos **GPU T4 (2× disponível no Kaggle)**. O treino com XGBoost utiliza **um
 
 Fonte: dataset Kaggle anexado como **`arquivos`** (três Parquets).
 
+https://www.kaggle.com/datasets/caiodferreira/arquivos
+
 - **Transações (2022)**  
   `internal_store_id, internal_product_id, transaction_date, quantity, net_value, ...`
 - **Cadastro de PDVs**  
   `pdv, premise (On/Off), categoria_pdv, zipcode`
 - **Cadastro de Produtos**  
   `produto, categoria, descricao, tipos, marca, fabricante, ...`
+
+
 ---
 
 ## Pipeline (visão geral)
 
 1. **Ingestão & Normalização**
-   - Leitura Parquet
+   - Leitura Parquet (certifique-se de passar o path correto).
    - `lower_snake_case` nos nomes de colunas.
 
 2. **Agregação Semanal**
@@ -97,10 +100,11 @@ Fonte: dataset Kaggle anexado como **`arquivos`** (três Parquets).
 
 ## Como rodar no Kaggle
 
-1. Crie um **Notebook** e adicione o dataset **`arquivos`** (Add data → “arquivos”).  
+1. Crie um **Notebook** e adicione o dataset **`arquivos`** (Link disponibilizado acima, porém são os dados do hackathon).  
 2. Em **Settings**, selecione **GPU → T4 x2** (ok rodar em 1 T4 também).  
 3. Copie o notebook deste repo (ou suba o `.ipynb`).  
 4. **Execute** as células em ordem.  
+   - O notebook faz a **detecção automática** dos Parquets.  
    - O output final é salvo em:
      - `/kaggle/working/forecast_jan2023_refined_small.csv`  
      - `/kaggle/working/forecast_jan2023_refined_small.parquet`
@@ -162,9 +166,8 @@ Para caber nos limites e focar no que gira:
 
 ```
 .
-├─ notebooks/
-│  ├─ notebook-versao-final-hackathon.ipynb              # notebook principal (pipeline completo)
-├─ README.md                               # este arquivo
+├─ notebook-versao-final-hackathon.ipynb 
+├─ README.md                              
 
 ```
 
